@@ -1,11 +1,21 @@
-# terragrunt-aws-ec2
+# K8s Kubeadm on AWS EC2 — Terragrunt
 
 Infraestructura AWS EC2 con Terragrunt para levantar un cluster de Kubernetes con kubeadm. Preparada para dos entornos: **LocalStack** (desarrollo local) y **AWS Producción**.
+
+## Qué crea esta infraestructura
+
+| Recurso            | Descripción                                                         |
+| ------------------ | ------------------------------------------------------------------- |
+| **VPC**            | Red privada virtual con subnet pública y acceso a internet          |
+| **Security Group** | Reglas de firewall: SSH, API Server (6443), etcd, kubelet, NodePort |
+| **Key Pair**       | Par de claves SSH generado automáticamente (guardado en `~/.ssh/`)  |
+| **EC2 Instances**  | Nodos master/worker con Debian 13, containerd, kubeadm preinstalado |
+| **Elastic IPs**    | IP fija para cada nodo (no cambia al reiniciar)                     |
 
 ## Estructura del proyecto
 
 ```
-terragrunt-aws-ec2/
+k8s-kubeadm-aws-ec2/
 ├── modules/                          # Módulos Terraform reutilizables
 │   ├── network/                      # VPC, Subnet, IGW, Route Table
 │   ├── security/                     # Security Group (k8s ports), Key Pair, SSH Key
@@ -23,7 +33,7 @@ terragrunt-aws-ec2/
 │       ├── network/terragrunt.hcl
 │       ├── security/terragrunt.hcl
 │       └── linux/terragrunt.hcl
-└── *.tf                              # Archivos Terraform originales (referencia)
+└── .gitignore
 ```
 
 ## Dependencias entre módulos
@@ -122,7 +132,9 @@ Cada nodo hereda los valores por defecto (`linux_instance_type`, `linux_root_vol
 | `volume_type`            | `gp2`                              | `gp3`              |
 | `ami_owners`             | `["136693071363", "000000000000"]` | `["136693071363"]` |
 
-## Después del apply: setup kubeadm
+## Después del apply: inicializar el cluster con kubeadm
+
+### Paso 1 — Obtener IPs y conectar
 
 ```bash
 # Ver IPs y comandos SSH de todos los nodos
@@ -132,18 +144,84 @@ terragrunt output eip_public_ips
 
 # Conectar al master
 ssh -i ~/.ssh/postula-prod-linux-us-east-1.pem admin@<MASTER_IP>
+```
 
+### Paso 2 — Inicializar el master
+
+```bash
 # En el master: inicializar el cluster
 sudo kubeadm init --pod-network-cidr=10.244.0.0/16
 
-# Configurar kubectl
+# Configurar kubectl para tu usuario
 mkdir -p $HOME/.kube
 sudo cp /etc/kubernetes/admin.conf $HOME/.kube/config
 sudo chown $(id -u):$(id -g) $HOME/.kube/config
 
-# Instalar CNI (Flannel)
+# Verificar que el master esté funcionando
+kubectl get nodes
+```
+
+### Paso 3 — Instalar un CNI (red de pods)
+
+```bash
+# Instalar Flannel (opción recomendada para empezar)
 kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
 
-# En cada worker: unirse al cluster (usar el comando que dio kubeadm init)
+# Verificar que los pods de sistema estén corriendo
+kubectl get pods -n kube-system
+```
+
+### Paso 4 — Unir los workers al cluster
+
+```bash
+# En cada worker: ejecutar el comando que devolvió kubeadm init
 sudo kubeadm join <MASTER_IP>:6443 --token <TOKEN> --discovery-token-ca-cert-hash sha256:<HASH>
+```
+
+> **Tip:** Si perdiste el token, genera uno nuevo desde el master:
+>
+> ```bash
+> kubeadm token create --print-join-command
+> ```
+
+### Paso 5 — Verificar el cluster
+
+```bash
+# Desde el master
+kubectl get nodes -o wide
+# Todos los nodos deben mostrar STATUS = Ready
+```
+
+## Puertos abiertos en el Security Group
+
+| Puerto      | Protocolo | Origen      | Uso                     |
+| ----------- | --------- | ----------- | ----------------------- |
+| 22          | TCP       | 0.0.0.0/0   | SSH                     |
+| 80, 443     | TCP       | 0.0.0.0/0   | HTTP / HTTPS            |
+| 6443        | TCP       | 0.0.0.0/0   | Kubernetes API Server   |
+| 2379-2380   | TCP       | VPC interna | etcd                    |
+| 10250       | TCP       | VPC interna | Kubelet API             |
+| 10257       | TCP       | VPC interna | kube-controller-manager |
+| 10259       | TCP       | VPC interna | kube-scheduler          |
+| 8472        | UDP       | VPC interna | Flannel VXLAN           |
+| 30000-32767 | TCP       | 0.0.0.0/0   | NodePort Services       |
+
+## Troubleshooting
+
+```bash
+# Ver logs del user-data (si algo falló en el arranque)
+sudo cat /var/log/cloud-init-output.log
+
+# Verificar que containerd está corriendo
+sudo systemctl status containerd
+
+# Verificar que kubelet está corriendo
+sudo systemctl status kubelet
+sudo journalctl -u kubelet -f
+
+# Re-generar token de unión (si expiró)
+kubeadm token create --print-join-command
+
+# Reiniciar kubeadm si algo salió mal
+sudo kubeadm reset -f
 ```

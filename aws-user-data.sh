@@ -1,7 +1,9 @@
-#! /bin/bash
-sudo apt-get update
-sudo apt-get install -y nginx
-sudo sed -i 's/80 default_server/81 default_server/g' /etc/nginx/sites-available/default
-echo "<h1>Test AWS</h1>" | sudo tee /var/www/html/index.nginx-debian.html
-sudo systemctl restart nginx
-sudo systemctl enable nginx
+# =============================================================================
+# NOTE: This file is only a reference / backup.
+#
+# The actual user-data script used by EC2 instances lives in:
+#   modules/linux/aws-user-data.sh
+#
+# That script installs containerd + kubeadm + kubelet + kubectl and prepares
+# each node so you only need to run 'kubeadm init' or 'kubeadm join'.
+# =============================================================================

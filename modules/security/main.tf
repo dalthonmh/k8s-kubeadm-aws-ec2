@@ -70,6 +70,24 @@ resource "aws_security_group" "aws-linux-sg" {
     description = "Kubelet API (internal)"
   }
 
+  # kube-scheduler
+  ingress {
+    from_port   = 10259
+    to_port     = 10259
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+    description = "kube-scheduler (internal)"
+  }
+
+  # kube-controller-manager
+  ingress {
+    from_port   = 10257
+    to_port     = 10257
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+    description = "kube-controller-manager (internal)"
+  }
+
   # NodePort Services
   ingress {
     from_port   = 30000
